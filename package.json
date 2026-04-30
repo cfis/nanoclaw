@@ -33,8 +33,10 @@
     "@onecli-sh/sdk": "^0.5.0",
     "better-sqlite3": "11.10.0",
     "chat": "^4.24.0",
+    "chat-adapter-imessage": "0.1.1",
     "cron-parser": "5.5.0",
-    "kleur": "^4.1.5"
+    "kleur": "^4.1.5",
+    "spectrum-ts": "1.1.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
