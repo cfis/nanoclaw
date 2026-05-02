@@ -53,9 +53,38 @@ export function hostGatewayArgs(): string[] {
   return args;
 }
 
+/**
+ * True iff SELinux is currently enforcing. Result is cached.
+ *
+ * On non-SELinux systems (Ubuntu, macOS, etc.) `getenforce` is missing
+ * and the helper returns false, so callers leave their bind mount flags
+ * unchanged.
+ */
+let cachedSELinuxEnforcing: boolean | undefined;
+export function isSELinuxEnforcing(): boolean {
+  if (cachedSELinuxEnforcing !== undefined) return cachedSELinuxEnforcing;
+  try {
+    const out = execSync('getenforce', {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 2000,
+    });
+    cachedSELinuxEnforcing = out.trim() === 'Enforcing';
+  } catch {
+    cachedSELinuxEnforcing = false;
+  }
+  return cachedSELinuxEnforcing;
+}
+
 /** Returns CLI args for a readonly bind mount. */
 export function readonlyMountArgs(hostPath: string, containerPath: string): string[] {
-  return ['-v', `${hostPath}:${containerPath}:ro`];
+  // Under SELinux enforcing, podman needs ,z to relabel the host path to
+  // container_file_t — a fresh home dir keeps user_home_t and the container
+  // can't read it. ,z (lowercase) is shared-mount safe; ,Z would be
+  // exclusive and break sibling sessions sharing the same source. On
+  // non-SELinux systems the suffix is omitted to match prior behavior.
+  const suffix = isSELinuxEnforcing() ? ':ro,z' : ':ro';
+  return ['-v', `${hostPath}:${containerPath}${suffix}`];
 }
 
 /** Stop a container by name. Uses execFileSync to avoid shell injection. */
