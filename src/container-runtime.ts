@@ -11,13 +11,46 @@ import { log } from './log.js';
 /** The container runtime binary name. */
 export const CONTAINER_RUNTIME_BIN = 'docker';
 
+/**
+ * True iff the runtime is rootless podman using pasta as its userspace
+ * network forwarder. Result is cached — `podman info` is non-trivial.
+ *
+ * Safe to call against real Docker: the `RootlessNetworkCmd` template
+ * field is podman-only, so `docker info` returns an empty string and
+ * the check returns false.
+ */
+let cachedRootlessPodmanPasta: boolean | undefined;
+function isRootlessPodmanWithPasta(): boolean {
+  if (cachedRootlessPodmanPasta !== undefined) return cachedRootlessPodmanPasta;
+  try {
+    const out = execSync(`${CONTAINER_RUNTIME_BIN} info --format '{{.Host.RootlessNetworkCmd}}'`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5000,
+    });
+    cachedRootlessPodmanPasta = out.trim() === 'pasta';
+  } catch {
+    cachedRootlessPodmanPasta = false;
+  }
+  return cachedRootlessPodmanPasta;
+}
+
 /** CLI args needed for the container to resolve the host gateway. */
 export function hostGatewayArgs(): string[] {
-  // On Linux, host.docker.internal isn't built-in — add it explicitly
-  if (os.platform() === 'linux') {
-    return ['--add-host=host.docker.internal:host-gateway'];
+  if (os.platform() !== 'linux') return [];
+  // On Linux, host.docker.internal isn't built-in — add it explicitly.
+  const args = ['--add-host=host.docker.internal:host-gateway'];
+  if (isRootlessPodmanWithPasta()) {
+    // Pasta does not by default forward host loopback into containers, so
+    // services bound to 127.0.0.1 (e.g. an OneCLI gateway) are unreachable
+    // from agent containers. --map-host-loopback redirects traffic destined
+    // for 169.254.1.2 — pasta's default gateway IP, which is what
+    // host.docker.internal resolves to — through to host 127.0.0.1.
+    // 169.254.1.2 is pasta's documented default; if a future pasta release
+    // changes it, this is where to update.
+    args.push('--network=pasta:--map-host-loopback,169.254.1.2');
   }
-  return [];
+  return args;
 }
 
 /** Returns CLI args for a readonly bind mount. */
