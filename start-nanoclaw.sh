@@ -1,26 +1,15 @@
 #!/bin/bash
-# start-nanoclaw.sh — Start NanoClaw without systemd
-# To stop: kill \$(cat /home/yue/src/nanoclaw/nanoclaw.pid)
+# start-nanoclaw.sh — Restart NanoClaw via systemd
+# The service is managed by: nanoclaw-v2-b824edf6.service (Restart=always)
+# Use systemctl for all lifecycle operations — do NOT use nohup/manual spawn.
 
 set -euo pipefail
 
-cd "/home/yue/src/nanoclaw"
+UNIT="nanoclaw.service"
 
-# Stop existing instance if running
-if [ -f "/home/yue/src/nanoclaw/nanoclaw.pid" ]; then
-  OLD_PID=$(cat "/home/yue/src/nanoclaw/nanoclaw.pid" 2>/dev/null || echo "")
-  if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-    echo "Stopping existing NanoClaw (PID $OLD_PID)..."
-    kill "$OLD_PID" 2>/dev/null || true
-    sleep 2
-  fi
-fi
-
-echo "Starting NanoClaw..."
-nohup "/usr/bin/node" "/home/yue/src/nanoclaw/dist/index.js" \
-  >> "/home/yue/src/nanoclaw/logs/nanoclaw.log" \
-  2>> "/home/yue/src/nanoclaw/logs/nanoclaw.error.log" &
-
-echo $! > "/home/yue/src/nanoclaw/nanoclaw.pid"
-echo "NanoClaw started (PID $!)"
-echo "Logs: tail -f /home/yue/src/nanoclaw/logs/nanoclaw.log"
+echo "Restarting NanoClaw via systemd..."
+systemctl --user restart "$UNIT"
+echo "NanoClaw restarted (systemd unit: $UNIT)"
+echo "Status: systemctl --user status $UNIT"
+echo "Logs:   journalctl --user -u $UNIT -f"
+echo "  or:   tail -f /home/yue/src/nanoclaw/logs/nanoclaw.log"
