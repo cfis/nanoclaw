@@ -57,7 +57,7 @@ const baileysLogger = pino({ level: 'silent' });
  * layer). This fetches from wppconnect's version tracker as a
  * more reliable source, with Baileys' own fetch as fallback.
  */
-async function resolveWaWebVersion(): Promise<[number, number, number] | undefined> {
+async function resolveWaWebVersion(): Promise<[number, number, number]> {
   // 1. Try wppconnect version tracker (HTML scrape — no JSON API)
   try {
     const res = await fetch('https://wppconnect.io/whatsapp-versions/', {
@@ -84,11 +84,14 @@ async function resolveWaWebVersion(): Promise<[number, number, number] | undefin
       return version as [number, number, number];
     }
   } catch {
-    // Fall through to undefined (Baileys will use hardcoded default)
+    // Fall through
   }
 
-  log.warn('Could not fetch WA Web version — using Baileys default (may be stale)');
-  return undefined;
+  throw new Error(
+    'Could not fetch current WhatsApp Web version from any source. ' +
+      'Baileys hardcodes a stale version that WhatsApp rejects (405). ' +
+      'Check network connectivity to wppconnect.io and web.whatsapp.com.',
+  );
 }
 
 const AUTH_DIR = path.join(process.cwd(), 'store', 'auth');

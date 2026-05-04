@@ -47,7 +47,7 @@ const PAIRING_CODE_FILE = path.join(process.cwd(), 'store', 'pairing-code.txt');
 const baileysLogger = pino({ level: 'silent' });
 
 /** Fetch current WA Web version — wppconnect tracker, then Baileys sw.js scrape. */
-async function resolveWaWebVersion(): Promise<[number, number, number] | undefined> {
+async function resolveWaWebVersion(): Promise<[number, number, number]> {
   try {
     const res = await fetch('https://wppconnect.io/whatsapp-versions/', {
       signal: AbortSignal.timeout(5000),
@@ -62,7 +62,7 @@ async function resolveWaWebVersion(): Promise<[number, number, number] | undefin
     const { version } = await fetchLatestWaWebVersion({});
     if (version) return version as [number, number, number];
   } catch { /* fall through */ }
-  return undefined;
+  throw new Error('Could not fetch current WhatsApp Web version — cannot connect with stale version');
 }
 
 type AuthMethod = 'qr' | 'pairing-code';
