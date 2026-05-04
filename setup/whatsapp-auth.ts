@@ -46,6 +46,25 @@ const AUTH_DIR = path.join(process.cwd(), 'store', 'auth');
 const PAIRING_CODE_FILE = path.join(process.cwd(), 'store', 'pairing-code.txt');
 const baileysLogger = pino({ level: 'silent' });
 
+/** Fetch current WA Web version — wppconnect tracker, then Baileys sw.js scrape. */
+async function resolveWaWebVersion(): Promise<[number, number, number] | undefined> {
+  try {
+    const res = await fetch('https://wppconnect.io/whatsapp-versions/', {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const match = html.match(/2\.3000\.(\d+)/);
+      if (match) return [2, 3000, Number(match[1])];
+    }
+  } catch { /* fall through */ }
+  try {
+    const { version } = await fetchLatestWaWebVersion({});
+    if (version) return version as [number, number, number];
+  } catch { /* fall through */ }
+  return undefined;
+}
+
 type AuthMethod = 'qr' | 'pairing-code';
 
 function parseArgs(args: string[]): { method: AuthMethod; phone?: string } {
@@ -116,9 +135,7 @@ export async function run(args: string[]): Promise<void> {
 
     async function connectSocket(isReconnect = false): Promise<void> {
       const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-      const { version } = await fetchLatestWaWebVersion({}).catch(() => ({
-        version: undefined,
-      }));
+      const version = await resolveWaWebVersion();
 
       const sock = makeWASocket({
         version,

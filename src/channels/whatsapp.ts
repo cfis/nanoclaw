@@ -48,6 +48,49 @@ import type { ChannelAdapter, ChannelSetup, ConversationInfo, InboundMessage, Ou
 
 const baileysLogger = pino({ level: 'silent' });
 
+/**
+ * Fetch the latest WhatsApp Web version. Baileys' built-in
+ * fetchLatestWaWebVersion scrapes sw.js which is aggressively
+ * rate-limited (429). When it fails, Baileys falls back to a
+ * hardcoded version that goes stale within weeks — WhatsApp
+ * rejects connections with an expired buildHash (405 at Noise
+ * layer). This fetches from wppconnect's version tracker as a
+ * more reliable source, with Baileys' own fetch as fallback.
+ */
+async function resolveWaWebVersion(): Promise<[number, number, number] | undefined> {
+  // 1. Try wppconnect version tracker (HTML scrape — no JSON API)
+  try {
+    const res = await fetch('https://wppconnect.io/whatsapp-versions/', {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const match = html.match(/2\.3000\.(\d+)/);
+      if (match) {
+        const version: [number, number, number] = [2, 3000, Number(match[1])];
+        log.info('Fetched WA Web version from wppconnect', { version });
+        return version;
+      }
+    }
+  } catch {
+    // Fall through to Baileys' own fetch
+  }
+
+  // 2. Try Baileys' built-in fetch (scrapes sw.js — often 429'd)
+  try {
+    const { version } = await fetchLatestWaWebVersion({});
+    if (version) {
+      log.info('Fetched WA Web version from Baileys', { version });
+      return version as [number, number, number];
+    }
+  } catch {
+    // Fall through to undefined (Baileys will use hardcoded default)
+  }
+
+  log.warn('Could not fetch WA Web version — using Baileys default (may be stale)');
+  return undefined;
+}
+
 const AUTH_DIR = path.join(process.cwd(), 'store', 'auth');
 const GROUP_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 const GROUP_METADATA_CACHE_TTL_MS = 60_000; // 1 min for outbound sends
@@ -354,10 +397,7 @@ registerChannelAdapter('whatsapp', {
     async function connectSocket(): Promise<void> {
       const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-      const { version } = await fetchLatestWaWebVersion({}).catch((err) => {
-        log.warn('Failed to fetch latest WA Web version, using default', { err });
-        return { version: undefined };
-      });
+      const version = await resolveWaWebVersion();
 
       sock = makeWASocket({
         version,
