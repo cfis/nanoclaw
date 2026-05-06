@@ -197,6 +197,7 @@ registerChannelAdapter('whatsapp', {
     // LID → phone JID mapping (WhatsApp's new ID system)
     const lidToPhoneMap: Record<string, string> = {};
     let botLidUser: string | undefined;
+    let botPhoneJid: string | undefined;
 
     // Outgoing queue for messages sent while disconnected
     const outgoingQueue: Array<{ jid: string; text: string }> = [];
@@ -496,8 +497,9 @@ registerChannelAdapter('whatsapp', {
           if (sock.user) {
             const phoneUser = sock.user.id.split(':')[0];
             const lidUser = sock.user.lid?.split(':')[0];
+            botPhoneJid = `${phoneUser}@s.whatsapp.net`;
             if (lidUser && phoneUser) {
-              setLidPhoneMapping(lidUser, `${phoneUser}@s.whatsapp.net`);
+              setLidPhoneMapping(lidUser, botPhoneJid);
               botLidUser = lidUser;
             }
           }
@@ -579,9 +581,16 @@ registerChannelAdapter('whatsapp', {
             const senderName = msg.pushName || sender.split('@')[0];
             const fromMe = msg.key.fromMe || false;
             // Filter bot's own messages to prevent echo loops.
-            // fromMe is always true for messages sent from this linked device,
-            // regardless of ASSISTANT_HAS_OWN_NUMBER mode.
-            if (fromMe) continue;
+            // In self-chat (user messaging their own number), all messages have
+            // fromMe=true — use sentMessageCache to distinguish bot echoes from
+            // user-typed messages. For all other chats, the blanket fromMe
+            // filter is correct since the user's phone messages shouldn't wake
+            // the agent in third-party conversations.
+            if (fromMe) {
+              const isSelfChat = botPhoneJid && chatJid === botPhoneJid;
+              if (!isSelfChat) continue;
+              if (sentMessageCache.has(msg.key.id || '')) continue;
+            }
 
             const isBotMessage = ASSISTANT_HAS_OWN_NUMBER ? false : content.startsWith(`${ASSISTANT_NAME}:`);
 
