@@ -2,7 +2,7 @@ import { findByName, getAllDestinations, type DestinationEntry } from './destina
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
-import { clearContinuation, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
+import { clearContinuation, clearTurnSendInvoked, getTurnSendInvoked, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
 import { clearCurrentInReplyTo, setCurrentInReplyTo } from './current-batch.js';
 import {
   formatMessages,
@@ -210,6 +210,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       });
     } finally {
       clearCurrentInReplyTo();
+      clearTurnSendInvoked();
     }
 
     // Ensure completed even if processQuery ended without a result event
@@ -378,7 +379,10 @@ async function processQuery(
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
         if (event.text) {
-          const { hasUnwrapped } = dispatchResultText(event.text, routing);
+          if (getTurnSendInvoked()) {
+            log(`Suppressing result text (send already fired this turn): ${event.text.slice(0, 200)}`);
+          }
+          const { hasUnwrapped } = getTurnSendInvoked() ? { hasUnwrapped: false } : dispatchResultText(event.text, routing);
           if (hasUnwrapped && !unwrappedNudged) {
             unwrappedNudged = true;
             const destinations = getAllDestinations();

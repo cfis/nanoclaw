@@ -77,3 +77,15 @@ export function setContinuation(providerName: string, id: string): void {
 export function clearContinuation(providerName: string): void {
   deleteValue(continuationKey(providerName));
 }
+
+const TURN_SEND_INVOKED_KEY = 'turn_send_invoked';
+
+export function setTurnSendInvoked(): void {
+  setValue(TURN_SEND_INVOKED_KEY, '1');
+}
+export function getTurnSendInvoked(): boolean {
+  return getValue(TURN_SEND_INVOKED_KEY) === '1';
+}
+export function clearTurnSendInvoked(): void {
+  deleteValue(TURN_SEND_INVOKED_KEY);
+}
