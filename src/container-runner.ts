@@ -441,13 +441,6 @@ async function buildContainerArgs(
   // Host gateway
   args.push(...hostGatewayArgs());
 
-  // User mapping
-  const hostUid = process.getuid?.();
-  const hostGid = process.getgid?.();
-  if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
-    args.push('-e', 'HOME=/home/node');
-  }
 
   // Volume mounts
   for (const mount of mounts) {
