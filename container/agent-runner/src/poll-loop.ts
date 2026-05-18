@@ -395,6 +395,9 @@ async function processQuery(
             );
           }
         }
+        // Reset per-turn flag so follow-up messages pushed into the same
+        // open query stream don't inherit the suppression from a prior turn.
+        clearTurnSendInvoked();
       }
     }
   } finally {

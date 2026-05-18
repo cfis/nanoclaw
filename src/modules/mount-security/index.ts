@@ -170,6 +170,10 @@ function matchesBlockedPattern(realPath: string, blockedPatterns: string[]): str
  */
 function findAllowedRoot(realPath: string, allowedRoots: AllowedRoot[]): AllowedRoot | null {
   for (const root of allowedRoots) {
+    if (!root.path) {
+      log.warn('Allowlist entry missing path field — skipping', { root });
+      continue;
+    }
     const expandedRoot = expandPath(root.path);
     const realRoot = getRealPath(expandedRoot);
 
