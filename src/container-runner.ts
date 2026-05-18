@@ -25,6 +25,7 @@ import { updateContainerConfigScalars, updateContainerConfigJson } from './db/co
 import {
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
+  isRootlessPodman,
   isSELinuxEnforcing,
   readonlyMountArgs,
   stopContainer,
@@ -441,6 +442,23 @@ async function buildContainerArgs(
   // Host gateway
   args.push(...hostGatewayArgs());
 
+  // User mapping — two regimes:
+  // 1. Rootless podman: --userns=keep-id:uid=1000,gid=1000 maps the image's
+  //    USER (node, uid 1000) to the host running user. Without it, podman's
+  //    default mapping puts the host user at container uid 0 and node lands
+  //    in the subuid range, unable to write host-owned bind-mounted files
+  //    (symptom: EACCES / "readonly database" despite correct host ownership).
+  // 2. Rootful Docker: no user namespace. Pass --user hostUid:hostGid when
+  //    the operator's uid isn't 0 or 1000 so container writes are owned by
+  //    the host user.
+  const hostUid = process.getuid?.();
+  const hostGid = process.getgid?.();
+  if (isRootlessPodman()) {
+    args.push('--userns=keep-id:uid=1000,gid=1000');
+  } else if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
+    args.push('--user', `${hostUid}:${hostGid}`);
+    args.push('-e', 'HOME=/home/node');
+  }
 
   // Volume mounts
   for (const mount of mounts) {
