@@ -77,3 +77,29 @@ export function setContinuation(providerName: string, id: string): void {
 export function clearContinuation(providerName: string): void {
   deleteValue(continuationKey(providerName));
 }
+
+// turn_send_invoked: did send_message / send_file fire this turn? Used by
+// poll-loop to suppress the SDK's closing-text result that would otherwise
+// be delivered as a duplicate of what the tool already sent.
+//
+// MUST be in SQLite. The nanoclaw MCP server (which owns send_message and
+// send_file) runs in a separate process from the poll-loop: index.ts spawns
+// it via `bun run mcp-tools/index.ts` and connects over stdio. SQLite is
+// the only IPC channel between the two processes. A module-level variable
+// here is invisible across the process boundary — set in the MCP server
+// process, the poll-loop reads false, and the suppression is dead code.
+//
+// SIGKILL-mid-turn (where the row would otherwise stick at '1' into the
+// next container's first turn) is handled by clearing the flag at the top
+// of runPollLoop() alongside clearStaleProcessingAcks — see poll-loop.ts.
+const TURN_SEND_INVOKED_KEY = 'turn_send_invoked';
+
+export function setTurnSendInvoked(): void {
+  setValue(TURN_SEND_INVOKED_KEY, '1');
+}
+export function getTurnSendInvoked(): boolean {
+  return getValue(TURN_SEND_INVOKED_KEY) === '1';
+}
+export function clearTurnSendInvoked(): void {
+  deleteValue(TURN_SEND_INVOKED_KEY);
+}

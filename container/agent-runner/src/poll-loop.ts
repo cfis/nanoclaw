@@ -2,7 +2,7 @@ import { findByName, getAllDestinations, type DestinationEntry } from './destina
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
-import { clearContinuation, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
+import { clearContinuation, clearTurnSendInvoked, getTurnSendInvoked, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
 import { clearCurrentInReplyTo, setCurrentInReplyTo } from './current-batch.js';
 import {
   formatMessages,
@@ -65,6 +65,13 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   // Clear leftover 'processing' acks from a previous crashed container.
   // This lets the new container re-process those messages.
   clearStaleProcessingAcks();
+
+  // Clear turn_send_invoked from any prior container that died mid-turn
+  // (SIGKILL between send_message firing and the outer try/finally clear).
+  // A stale '1' here would suppress the first legitimate result of this
+  // container's first turn. Safe to clear unconditionally — within-turn
+  // state has no cross-container value.
+  clearTurnSendInvoked();
 
   let pollCount = 0;
   let isFirstPoll = true;
@@ -197,6 +204,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         log(`Stale session detected (${continuation}) — clearing for next retry`);
         continuation = undefined;
         clearContinuation(config.providerName);
+        clearTurnSendInvoked();
       }
 
       // Write error response so the user knows something went wrong
@@ -210,6 +218,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       });
     } finally {
       clearCurrentInReplyTo();
+      clearTurnSendInvoked();
     }
 
     // Ensure completed even if processQuery ended without a result event
@@ -378,19 +387,27 @@ async function processQuery(
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
         if (event.text) {
-          const { hasUnwrapped } = dispatchResultText(event.text, routing);
-          if (hasUnwrapped && !unwrappedNudged) {
-            unwrappedNudged = true;
-            const destinations = getAllDestinations();
-            const names = destinations.map((d) => d.name).join(', ');
-            query.push(
-              `<system>Your response was not delivered — it was not wrapped in <message to="name">...</message> blocks. ` +
-                `All output must be wrapped: use <message to="name"> for content to send, or <internal> for scratchpad. ` +
-                `Your destinations: ${names}. ` +
-                `Please re-send your response with the correct wrapping.</system>`,
-            );
+          const sendFired = getTurnSendInvoked();
+          if (sendFired) {
+            log(`Suppressing result text (send already fired this turn): ${event.text.slice(0, 200)}`);
+          } else {
+            const { hasUnwrapped } = dispatchResultText(event.text, routing);
+            if (hasUnwrapped && !unwrappedNudged) {
+              unwrappedNudged = true;
+              const destinations = getAllDestinations();
+              const names = destinations.map((d) => d.name).join(', ');
+              query.push(
+                `<system>Your response was not delivered — it was not wrapped in <message to="name">...</message> blocks. ` +
+                  `All output must be wrapped: use <message to="name"> for content to send, or <internal> for scratchpad. ` +
+                  `Your destinations: ${names}. ` +
+                  `Please re-send your response with the correct wrapping.</system>`,
+              );
+            }
           }
         }
+        // Reset per-result so follow-up turns pushed into the same open query
+        // stream don't inherit suppression from a prior turn's send_message.
+        clearTurnSendInvoked();
       }
     }
   } finally {
