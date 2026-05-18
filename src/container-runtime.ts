@@ -35,6 +35,28 @@ function isRootlessPodmanWithPasta(): boolean {
   return cachedRootlessPodmanPasta;
 }
 
+/**
+ * True iff the container runtime is rootless podman. Cached — `info` is
+ * non-trivial. Safe against real Docker: the `Host.Security.Rootless`
+ * template field is podman-only, so `docker info` returns an empty string
+ * and the helper returns false.
+ */
+let cachedRootlessPodman: boolean | undefined;
+export function isRootlessPodman(): boolean {
+  if (cachedRootlessPodman !== undefined) return cachedRootlessPodman;
+  try {
+    const out = execSync(`${CONTAINER_RUNTIME_BIN} info --format '{{.Host.Security.Rootless}}'`, {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5000,
+    });
+    cachedRootlessPodman = out.trim() === 'true';
+  } catch {
+    cachedRootlessPodman = false;
+  }
+  return cachedRootlessPodman;
+}
+
 /** CLI args needed for the container to resolve the host gateway. */
 export function hostGatewayArgs(): string[] {
   if (os.platform() !== 'linux') return [];
