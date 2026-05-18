@@ -2,7 +2,7 @@ import { findByName, getAllDestinations, type DestinationEntry } from './destina
 import { getPendingMessages, markProcessing, markCompleted, type MessageInRow } from './db/messages-in.js';
 import { writeMessageOut } from './db/messages-out.js';
 import { getInboundDb, touchHeartbeat, clearStaleProcessingAcks } from './db/connection.js';
-import { clearContinuation, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
+import { clearContinuation, clearTurnSentPayloads, getTurnSentPayloads, migrateLegacyContinuation, setContinuation } from './db/session-state.js';
 import { clearCurrentInReplyTo, setCurrentInReplyTo } from './current-batch.js';
 import {
   formatMessages,
@@ -103,6 +103,13 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
   // Clear leftover 'processing' acks from a previous crashed container.
   // This lets the new container re-process those messages.
   clearStaleProcessingAcks();
+
+  // Clear turn_sent_payloads from any prior container that died mid-turn
+  // (SIGKILL between send_message firing and the outer try/finally clear).
+  // Stale payloads here would suppress legitimate result blocks of this
+  // container's first turn whose body happens to match. Safe to clear
+  // unconditionally — within-turn state has no cross-container value.
+  clearTurnSentPayloads();
 
   let pollCount = 0;
   let isFirstPoll = true;
@@ -248,6 +255,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
         log(`Stale session detected (${continuation}) — clearing for next retry`);
         continuation = undefined;
         clearContinuation(config.providerName);
+        clearTurnSentPayloads();
       }
 
       // Write error response so the user knows something went wrong
@@ -261,6 +269,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       });
     } finally {
       clearCurrentInReplyTo();
+      clearTurnSentPayloads();
     }
 
     // Ensure completed even if processQuery ended without a result event
@@ -455,7 +464,14 @@ async function processQuery(
         // at all — either way the turn is finished.
         markCompleted(initialBatchIds);
         if (event.text) {
-          const { hasUnwrapped } = dispatchResultText(event.text, routing);
+          // Pass the turn's already-sent payloads so dispatchResultText can
+          // skip any <message> block whose body is a verbatim duplicate of
+          // something send_message / send_file already shipped. Distinct
+          // result content (e.g. send_message("looking it up") + result with
+          // the actual answer) flows through normally — only the literal
+          // duplicates are filtered.
+          const sentPayloads = getTurnSentPayloads();
+          const { hasUnwrapped } = dispatchResultText(event.text, routing, sentPayloads);
           if (hasUnwrapped && !unwrappedNudged) {
             unwrappedNudged = true;
             const destinations = getAllDestinations();
@@ -468,6 +484,9 @@ async function processQuery(
             );
           }
         }
+        // Reset per-result so follow-up turns pushed into the same open query
+        // stream don't inherit suppression from a prior turn's send_message.
+        clearTurnSentPayloads();
       }
     }
   } finally {
@@ -498,6 +517,23 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
 }
 
 /**
+ * Whitespace-normalized verbatim duplicate check: is the parsed result
+ * block body the same content that send_message / send_file already shipped
+ * earlier this turn? Exported for direct testing.
+ *
+ * Normalization collapses any run of whitespace to a single space and trims
+ * leading/trailing whitespace so the SDK reformatting between the tool input
+ * (e.g. "hello world") and the result text (e.g. "hello\nworld") doesn't
+ * slip a real duplicate through.
+ */
+export function isVerbatimDuplicate(body: string, sentPayloads: string[]): boolean {
+  if (sentPayloads.length === 0) return false;
+  const normalize = (s: string): string => s.trim().replace(/\s+/g, ' ');
+  const normalizedBody = normalize(body);
+  return sentPayloads.some((p) => normalize(p) === normalizedBody);
+}
+
+/**
  * Parse the agent's final text for <message to="name">...</message> blocks
  * and dispatch each one to its resolved destination. Text outside of blocks
  * (including <internal>...</internal>) is scratchpad — logged but not sent.
@@ -505,7 +541,11 @@ function handleEvent(event: ProviderEvent, _routing: RoutingContext): void {
  * The agent must always wrap output in <message to="name">...</message>
  * blocks, even with a single destination. Bare text is scratchpad only.
  */
-function dispatchResultText(text: string, routing: RoutingContext): { sent: number; hasUnwrapped: boolean } {
+function dispatchResultText(
+  text: string,
+  routing: RoutingContext,
+  sentPayloads: string[] = [],
+): { sent: number; hasUnwrapped: boolean } {
   const MESSAGE_RE = /<message\s+to="([^"]+)"\s*>([\s\S]*?)<\/message>/g;
 
   let match: RegExpExecArray | null;
@@ -520,6 +560,14 @@ function dispatchResultText(text: string, routing: RoutingContext): { sent: numb
     const toName = match[1];
     const body = match[2].trim();
     lastIndex = MESSAGE_RE.lastIndex;
+
+    if (isVerbatimDuplicate(body, sentPayloads)) {
+      // Verbatim duplicate of something send_message / send_file already
+      // shipped this turn — skip silently rather than double-deliver.
+      log(`Suppressing duplicate <message to="${toName}"> block (verbatim of an already-sent payload)`);
+      scratchpadParts.push(`[duplicate of sent payload, suppressed] ${body}`);
+      continue;
+    }
 
     const dest = findByName(toName);
     if (!dest) {
