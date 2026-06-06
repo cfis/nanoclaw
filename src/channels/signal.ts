@@ -574,6 +574,8 @@ export function createSignalAdapter(config: {
             ...(syncSent.quote ? quoteToContent(syncSent.quote) : {}),
           },
           timestamp,
+          isMention: true,
+          isGroup: false,
         };
         await setup.onInbound(platformId, null, msg);
         return;
@@ -671,6 +673,8 @@ export function createSignalAdapter(config: {
         ...(dataMessage.quote ? quoteToContent(dataMessage.quote) : {}),
       },
       timestamp,
+      isMention: !isGroup,
+      isGroup,
     };
     await setup.onInbound(platformId, null, msg);
 
